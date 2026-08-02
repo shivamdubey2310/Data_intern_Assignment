@@ -3,7 +3,22 @@ import json
 import pandas as pd
 from pathlib import Path
 import time
+import random
 import sys
+import logging
+import re
+
+# --- LOGGING SETUP ---
+# This will print to your console AND save everything to scraper.log
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("scraper.log", mode='a', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
 BASE_URL = "https://soilhealth4.dac.gov.in/"
@@ -21,7 +36,6 @@ SCHEMES = {
 }
 
 # --- GRAPHQL QUERIES ---
-
 QUERY_STATE = """query GetState($getStateId: String, $code: String) {
   getState(id: $getStateId, code: $code)
 }"""
@@ -63,27 +77,36 @@ QUERY_DATA = """query GetNutrientDashboardForPortal($state: ID, $district: ID, $
 
 # --- CORE FUNCTIONS ---
 
-def fetch_graphql(operation_name, variables, query_string):
-    """Executes a GraphQL POST request."""
+def sanitize_name(name: str) -> str:
+    """Removes characters that are illegal in file/folder paths."""
+    if not name:
+        return "Unknown"
+    # Replace slashes, backslashes, colons, asterisks, etc., with an underscore
+    return re.sub(r'[\\/*?:"<>|]', '_', str(name)).strip()
+
+def fetch_graphql(operation_name, variables, query_string, max_retries=3):
+    """Executes a GraphQL POST request with exponential backoff retries."""
     payload = {
         "operationName": operation_name,
         "variables": variables,
         "query": query_string
     }
     
-    try:
-        response = requests.post(BASE_URL, json=payload, headers=HEADERS)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Network Error during {operation_name}: {e}")
-        return None
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(BASE_URL, json=payload, headers=HEADERS, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            wait_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+            logger.warning(f"Network Error during {operation_name}: {e}. Retrying in {wait_time:.1f}s...")
+            time.sleep(wait_time)
+            
+    logger.error(f"Failed {operation_name} entirely after {max_retries} attempts.")
+    return None
 
 def parse_graphql_response(response_dict, query_key):
-    """
-    Extracts data from the response. The portal often returns the actual 
-    JSON array as a stringified string, so we must parse it twice.
-    """
+    """Extracts data from the response, handling stringified JSON if needed."""
     if not response_dict or 'data' not in response_dict:
         return []
     
@@ -95,7 +118,7 @@ def parse_graphql_response(response_dict, query_key):
         try:
             return json.loads(raw_content)
         except json.JSONDecodeError:
-            print(f"Failed to parse JSON string for {query_key}")
+            logger.error(f"Failed to parse JSON string for {query_key}")
             return []
     return raw_content
 
@@ -129,58 +152,71 @@ def get_nutrient_data(state_id, district_id, block_id, cycle, scheme):
 # --- MAIN SCRAPER LOGIC ---
 
 def main():
-    print("Initializing Soil Health Scraper...")
+    logger.info("Initializing Soil Health Scraper...")
     
     states = get_states()
     if not states:
-        print("Failed to fetch states. Check headers or internet connection.")
+        logger.critical("Failed to fetch states. Check headers or internet connection.")
         sys.exit(1)
         
-    print(f"Found {len(states)} states. Starting extraction...\n")
+    logger.info(f"Found {len(states)} states. Starting extraction...")
 
     for state in states:
         state_id = state.get('id') or state.get('_id')
-        state_name = state.get('name', 'Unknown_State').strip()
+        raw_state_name = state.get('name', 'Unknown_State')
+        safe_state_name = sanitize_name(raw_state_name)
         
-        print(f"\n--> Accessing State: {state_name}")
+        logger.info(f"--> Accessing State: {raw_state_name}")
         districts = get_districts(state_id)
         
         for district in districts:
             district_id = district.get('id') or district.get('_id')
-            district_name = district.get('name', 'Unknown_District').strip()
+            raw_district_name = district.get('name', 'Unknown_District')
+            safe_district_name = sanitize_name(raw_district_name)
             
             blocks = get_blocks(state_id, district_id)
             
             for block in blocks:
                 block_id = block.get('id') or block.get('_id')
-                block_name = block.get('name', 'Unknown_Block').strip()
+                raw_block_name = block.get('name', 'Unknown_Block')
+                safe_block_name = sanitize_name(raw_block_name)
                 
                 for cycle in CYCLES:
                     for nutrient_type, scheme_id in SCHEMES.items():
                         
-                        # 1. Fetch
+                        # --- 1. SET UP PATHS & CHECKPOINTING ---
+                        folder_path = Path(f"data/raw/{cycle}/{safe_state_name}/{safe_district_name}")
+                        folder_path.mkdir(parents=True, exist_ok=True)
+                        
+                        file_name = f"{safe_block_name}_{nutrient_type}.csv"
+                        file_path = folder_path / file_name
+                        
+                        if file_path.exists():
+                            logger.info(f"[~] SKIP: {file_name} in {cycle} (Already exists)")
+                            continue
+                        
+                        # --- 2. ORGANIC DELAY ---
+                        # Sleep between 2 to 5 seconds to prevent rate limits
+                        sleep_time = random.uniform(2.0, 5.0)
+                        time.sleep(sleep_time)
+
+                        # --- 3. FETCH & PROCESS ---
                         raw_data = get_nutrient_data(state_id, district_id, block_id, cycle, scheme_id)
                         
                         if raw_data and len(raw_data) > 0:
-                            # 2. Transform nested JSON to flat DataFrame
-                            # This completely flattens the dictionaries into columns like 'state_name', 'results_pH_Neutral'
                             df = pd.json_normalize(raw_data, sep='_')
-                            
-                            # 3. Create folder architecture
-                            folder_path = Path(f"data/raw/{cycle}/{state_name}/{district_name}")
-                            folder_path.mkdir(parents=True, exist_ok=True)
-                            
-                            # 4. Save
-                            file_name = f"{block_name}_{nutrient_type}.csv"
-                            file_path = folder_path / file_name
                             df.to_csv(file_path, index=False)
-                            
-                            print(f"    [+] Saved {len(df)} records -> {file_path}")
+                            logger.info(f"[+] SAVED: {len(df)} records -> {file_path}")
                         else:
-                            print(f"    [-] No {nutrient_type} data for {block_name} ({cycle})")
-                        
-                        # Be polite to the API to avoid IP bans
-                        time.sleep(0.5)
+                            # Not an error, just an empty dataset from the government
+                            logger.debug(f"[-] EMPTY: No {nutrient_type} data for {safe_block_name} ({cycle})")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Scraper manually stopped by user.")
+        sys.exit(0)
+    except Exception as e:
+        logger.critical(f"An unexpected fatal error occurred: {e}", exc_info=True)
+        sys.exit(1)

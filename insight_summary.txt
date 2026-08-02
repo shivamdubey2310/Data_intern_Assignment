@@ -1,0 +1,22 @@
+=== NATIONAL AVERAGES ===
+N_Deficiency_Pct: 67.50%
+P_Deficiency_Pct: 21.73%
+K_Deficiency_Pct: 21.66%
+S_Deficiency_Pct: 18.58%
+Fe_Deficiency_Pct: 28.85%
+Zn_Deficiency_Pct: 38.61%
+Cu_Deficiency_Pct: 5.28%
+B_Deficiency_Pct: 36.14%
+Mn_Deficiency_Pct: 11.29%
+OC_Deficiency_Pct: 56.88%
+Saline_Pct: 3.35%
+
+=== WORST PERFORMING STATES (MACRO) ===
+Highest N Deficiency: Andaman & Nicobar (83.68%)
+Highest P Deficiency: Andaman & Nicobar (90.04%)
+Highest K Deficiency: Andaman & Nicobar (88.74%)
+Highest OC Deficiency: Andaman & Nicobar (90.82%)
+
+=== HIGHEST SOIL SALINITY STATES ===
+Andaman & Nicobar: 13.47%
+Andhra Pradesh: 2.90%

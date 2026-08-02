@@ -1,2 +1,6 @@
 requests
 pandas
+tabulate
+ipykernel
+matplotlib
+seaborn
