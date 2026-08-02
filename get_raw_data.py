@@ -216,11 +216,11 @@ def main() -> None:
                         file_name = f"{safe_block_name}_{nutrient_type}.csv"
                         file_path = folder_path / file_name
 
-                        # if file_path.exists():
-                        #     logger.info(
-                        #         "[~] SKIP: %s in %s (Already exists)", file_name, cycle
-                        #     )
-                        #     continue
+                        if file_path.exists():
+                            logger.info(
+                                "[~] SKIP: %s in %s (Already exists)", file_name, cycle
+                            )
+                            continue
 
                         sleep_time = random.uniform(SLEEP_MIN, SLEEP_MAX)
                         time.sleep(sleep_time)
